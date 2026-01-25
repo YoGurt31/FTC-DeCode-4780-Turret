@@ -67,7 +67,7 @@ public class AutonBlue extends LinearOpMode {
         robot.scoringMechanisms.flyWheel1.setPower(0.0);
         robot.scoringMechanisms.flyWheel2.setPower(0.0);
         robot.scoringMechanisms.rollerIntake.setPower(0.0);
-        robot.scoringMechanisms.sorterIntake.setPower(0.0);
+        robot.scoringMechanisms.turretRotation.setPower(0.0);
         robot.driveTrain.tankDrive(0.0, 0.0);
         robot.driveTrain.brake();
         try {

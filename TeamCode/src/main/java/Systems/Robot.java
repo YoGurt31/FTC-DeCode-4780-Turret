@@ -1,6 +1,7 @@
 package Systems;
 
 import org.firstinspires.ftc.robotcore.external.navigation.Pose2D;
+
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.hardware.limelightvision.LLResult;
@@ -10,6 +11,7 @@ import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.Servo;
+import com.qualcomm.robotcore.util.ElapsedTime;
 import com.qualcomm.robotcore.util.Range;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
@@ -179,7 +181,7 @@ public class Robot {
                 double absErr = Math.abs(err);
                 double scaledMax = maxRotatePower;
                 if (absErr < 20.0) scaledMax = Math.min(scaledMax, 0.25);
-                if (absErr < 8.0)  scaledMax = Math.min(scaledMax, 0.15);
+                if (absErr < 8.0) scaledMax = Math.min(scaledMax, 0.15);
                 rotate = Range.clip(rotate, -scaledMax, scaledMax);
 
                 if (absErr > 3.0 && Math.abs(rotate) < minRotatePower) {
@@ -196,19 +198,25 @@ public class Robot {
 
             tankDrive(0.0, 0.0);
         }
+    }
 
-        private static double wrapDeg(double deg) {
-            while (deg > 180.0) deg -= 360.0;
-            while (deg <= -180.0) deg += 360.0;
-            return deg;
-        }
-
+    public static double wrapDeg(double deg) {
+        while (deg > 180.0) deg -= 360.0;
+        while (deg <= -180.0) deg += 360.0;
+        return deg;
     }
 
     public static class ScoringMechanisms {
         // Hardware Devices
         public DcMotorEx rollerIntake, turretRotation, flyWheel1, flyWheel2;
         public Servo artifactRelease;
+
+        // FlyWheel Variables
+        public static final double FlyWheelTicksPerRev = 28.0;
+        public static final double F = 20.0;
+        public static final double P = 2.5 * F;
+        public static final double I = 0.0;
+        public static final double D = 0.0;
 
         public void init(HardwareMap hardwareMap) {
 
@@ -223,11 +231,6 @@ public class Robot {
             turretRotation.setMode(DcMotorEx.RunMode.STOP_AND_RESET_ENCODER);
             turretRotation.setMode(DcMotorEx.RunMode.RUN_USING_ENCODER);
             turretRotation.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-
-            double F = 17.75;
-            double P = 2.5 * F;
-            double I = 00.000;
-            double D = 00.000;
 
             flyWheel1 = hardwareMap.get(DcMotorEx.class, "fW1");
             flyWheel1.setDirection(DcMotorEx.Direction.FORWARD);
@@ -244,10 +247,164 @@ public class Robot {
             flyWheel2.setVelocityPIDFCoefficients(P, I, D, F);
 
             artifactRelease = hardwareMap.get(Servo.class, "aR");
+
+            turretZeroOffsetTicks = 0.0;
+            aimMode = TurretAimMode.Quick;
+            lastTargetSeenTimeS = 0.0;
+            turretAimTimer.reset();
         }
 
-        // VARIABLES
-        public final double TicksPerRev = 28.0;
+        public void setFlywheelRPS(double rps) {
+            if (flyWheel1 == null || flyWheel2 == null) return;
+            double tps = rps * FlyWheelTicksPerRev;
+            flyWheel1.setVelocity(tps);
+            flyWheel2.setVelocity(tps);
+        }
+
+        public void stopFlywheel() {
+            if (flyWheel1 == null || flyWheel2 == null) return;
+            flyWheel1.setPower(0.0);
+            flyWheel2.setPower(0.0);
+        }
+
+        // Turret Variables
+        private double turretZeroOffsetTicks = 0.0;
+        private final ElapsedTime turretAimTimer = new ElapsedTime();
+
+        private enum TurretAimMode {Quick, Precise}
+        private TurretAimMode aimMode = TurretAimMode.Quick;
+        private double lastTargetSeenTimeS = 0.0;
+
+        public static final double TurretTicksPerRev = 145.1;
+        public static final double TurretDriver = 24.0;
+        public static final double TurretDriven = 100.0;
+        public static final double TurretOutputToTurretRatio = TurretDriver / TurretDriven;
+        public static final double TurretTicksPerTurretRev = TurretTicksPerRev / TurretOutputToTurretRatio;
+        public static final double TurretDegPerTick = 360.0 / TurretTicksPerTurretRev;
+
+        public static final double TurretMinDeg = -180.0;
+        public static final double TurretMaxDeg = 180.0;
+
+        public static final double LimitGuard = 0.5;
+
+        public static final double QuickKp = 0.020;
+        public static final double QuickMaxPower = 1.0;
+        public static final double QuickDeadband = 5.0;
+
+        public static final double PreciseKp = 0.020;
+        public static final double PreciseMaxPower = 0.35;
+        public static final double PreciseDeadband = 1.0;
+
+        public static final double SwitchDeadband = 15.0;
+        public static final double LostTargetTimeout = 0.20;
+
+        public void zeroTurretHere() {
+            if (turretRotation == null) return;
+            turretZeroOffsetTicks = turretRotation.getCurrentPosition();
+        }
+
+        public double getTurretDeg() {
+            if (turretRotation == null) return 0.0;
+            double ticks = turretRotation.getCurrentPosition() - turretZeroOffsetTicks;
+            return ticks * TurretDegPerTick;
+        }
+
+        private static double clamp(double v, double lo, double hi) {
+            return Math.max(lo, Math.min(hi, v));
+        }
+
+        private boolean atMinLimit() {
+            return getTurretDeg() <= (TurretMinDeg + LimitGuard);
+        }
+
+        private boolean atMaxLimit() {
+            return getTurretDeg() >= (TurretMaxDeg - LimitGuard);
+        }
+
+        private double applyTurretLimitsToPower(double requestedPower) {
+            if (requestedPower < 0 && atMinLimit()) return 0.0;
+            if (requestedPower > 0 && atMaxLimit()) return 0.0;
+            return requestedPower;
+        }
+
+        private double turretErrDeg(double desiredDeg, double currentDeg) {
+            double errShort = wrapDeg(desiredDeg - currentDeg);
+            double errLong;
+
+            if (errShort >= 0) {
+                errLong = errShort - 360.0;
+            } else {
+                errLong = errShort + 360.0;
+            }
+
+            double targetShort = currentDeg + errShort;
+            double targetLong  = currentDeg + errLong;
+
+            boolean shortOk = (targetShort >= TurretMinDeg) && (targetShort <= TurretMaxDeg);
+            boolean longOk  = (targetLong  >= TurretMinDeg) && (targetLong  <= TurretMaxDeg);
+
+            if (shortOk && longOk) {
+                return (Math.abs(errShort) <= Math.abs(errLong)) ? errShort : errLong;
+            }
+            if (shortOk) return errShort;
+            if (longOk) return errLong;
+
+            double clampedTarget = clamp(desiredDeg, TurretMinDeg, TurretMaxDeg);
+            return clampedTarget - currentDeg;
+        }
+
+        private void setTurretPower(double pwr) {
+            if (turretRotation == null) return;
+            turretRotation.setMode(DcMotorEx.RunMode.RUN_USING_ENCODER);
+            turretRotation.setPower(Range.clip(pwr, -1.0, 1.0));
+        }
+
+        private void stopTurret() {
+            if (turretRotation == null) return;
+            turretRotation.setPower(0.0);
+        }
+
+        public boolean autoAimTurret(double robotHeadingDeg, double goalHeadingDeg, double txDeg, boolean hasTarget) {
+            if (turretRotation == null) return false;
+
+            double nowS = turretAimTimer.seconds();
+            if (hasTarget) lastTargetSeenTimeS = nowS;
+
+            double desiredTurretDeg = wrapDeg(goalHeadingDeg - robotHeadingDeg);
+            double currentTurretDeg = getTurretDeg();
+            double turretErrDeg = turretErrDeg(desiredTurretDeg, currentTurretDeg);
+
+            if (aimMode == TurretAimMode.Quick) {
+                if (hasTarget && Math.abs(turretErrDeg) <= SwitchDeadband) {
+                    aimMode = TurretAimMode.Precise;
+                }
+            } else {
+                boolean targetRecentlyLost = (!hasTarget) && ((nowS - lastTargetSeenTimeS) > LostTargetTimeout);
+                if (targetRecentlyLost) {
+                    aimMode = TurretAimMode.Quick;
+                }
+            }
+
+            if (aimMode == TurretAimMode.Precise && hasTarget) {
+                if (Math.abs(txDeg) <= PreciseDeadband) {
+                    stopTurret();
+                    return true;
+                }
+                double cmd = Range.clip(txDeg * PreciseKp, -PreciseMaxPower, PreciseMaxPower);
+                cmd = applyTurretLimitsToPower(cmd);
+                setTurretPower(cmd);
+                return false;
+            } else {
+                if (Math.abs(turretErrDeg) <= QuickDeadband) {
+                    stopTurret();
+                    return false;
+                }
+                double cmd = Range.clip(turretErrDeg * QuickKp, -QuickMaxPower, QuickMaxPower);
+                cmd = applyTurretLimitsToPower(cmd);
+                setTurretPower(cmd);
+                return false;
+            }
+        }
     }
 
     public static class Vision {
@@ -269,7 +426,8 @@ public class Robot {
             if (limeLight != null) {
                 try {
                     limeLight.pipelineSwitch(desiredPipeline);
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
         }
 

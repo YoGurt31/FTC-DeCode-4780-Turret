@@ -13,7 +13,7 @@ import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import Systems.Robot;
 
 @TeleOp(name = "TestTank", group = "TeleOp")
-@Disabled
+//@Disabled
 public class TeleOpBasic extends LinearOpMode {
 
     // Robot Instance
@@ -30,8 +30,6 @@ public class TeleOpBasic extends LinearOpMode {
 
         robot.vision.limeLight.setPollRateHz(15);
 
-        double drive, rotate;
-
         telemetry.addLine("Status: Initialized. Ready to start.");
         telemetry.update();
 
@@ -39,166 +37,109 @@ public class TeleOpBasic extends LinearOpMode {
 
         while (opModeIsActive()) {
 
-            // AprilTag Targeting
-            boolean activeTargeting = gamepad1.left_trigger >= 0.25;
-            LLResult result = robot.vision.limeLight.getLatestResult();
-            boolean hasTarget = false;
-            double tagArea;
+            robot.driveTrain.pinPoint.update();
 
-            if (result != null && result.isValid()) {
-                java.util.List<LLResultTypes.FiducialResult> tags = result.getFiducialResults();
-                hasTarget = tags != null && !tags.isEmpty();
-            }
-
-            if (hasTarget) {
-                tagArea = result.getTa();
-                if (tagArea >= robot.vision.tagAreaThreshold) {
-                    robot.scoringMechanisms.targetRPS = robot.scoringMechanisms.closeTargetRPS;
-                } else {
-                    robot.scoringMechanisms.targetRPS = robot.scoringMechanisms.farTargetRPS;
-                }
-            } else {
-                robot.scoringMechanisms.targetRPS = robot.scoringMechanisms.farTargetRPS;
-            }
-
-            // AIMBOT
-            if (activeTargeting && hasTarget) {
-                double headingError = result.getTx();
-                drive = -gamepad1.left_stick_y;
-                rotate = Range.clip(headingError * robot.vision.rotateGain, -robot.vision.maxRotate, robot.vision.maxRotate);
-            } else {
-                drive = -gamepad1.left_stick_y;
-                rotate = gamepad1.right_stick_x;
-            }
-
+            // Drive
+            double drive = -gamepad1.left_stick_y;
+            double rotate = gamepad1.right_stick_x;
             robot.driveTrain.tankDrive(drive, rotate);
 
-            // Brake DriveTrain if No Joystick Input (1e-2 (0.01) Accounts for Stick Drift)
+            // Brake
             if (Math.abs(drive) <= 1e-2 && Math.abs(rotate) <= 1e-2) {
                 robot.driveTrain.brake();
             }
 
-            // Intake Control
-            if (gamepad1.left_bumper && gamepad1.right_bumper) {
-                robot.scoringMechanisms.rollerIntake.setPower(-1.0);
-                robot.scoringMechanisms.sorterIntake.setPower(0.0);
-            } else if (gamepad1.left_bumper) {
-                robot.scoringMechanisms.rollerIntake.setPower(1);
-                robot.scoringMechanisms.sorterIntake.setPower(1);
-            } else if (gamepad1.right_bumper) {
-                robot.scoringMechanisms.rollerIntake.setPower(1);
-                robot.scoringMechanisms.sorterIntake.setPower(-1);
-            } else {
-                robot.scoringMechanisms.rollerIntake.setPower(0.0);
-                robot.scoringMechanisms.sorterIntake.setPower(0.0);
-            }
+            // Vision
+            LLResult result = robot.vision.limeLight.getLatestResult();
+            boolean hasTag = false;
+            double txDeg = 0.0;
+            double tagArea = 0.0;
 
-            // FlyWheel Control
-            double measuredFlywheelRps1 = robot.scoringMechanisms.flyWheel1.getVelocity() / robot.scoringMechanisms.TicksPerRev;
-            double measuredFlywheelRps2 = robot.scoringMechanisms.flyWheel2.getVelocity() / robot.scoringMechanisms.TicksPerRev;
-            double averageFlywheelRps = (measuredFlywheelRps1 + measuredFlywheelRps2) / 2;
-
-            if (gamepad1.right_trigger >= 0.05) {
-                robot.scoringMechanisms.flyWheel1.setVelocity(robot.scoringMechanisms.targetRPS * robot.scoringMechanisms.TicksPerRev);
-                robot.scoringMechanisms.flyWheel2.setVelocity(robot.scoringMechanisms.targetRPS * robot.scoringMechanisms.TicksPerRev);
-            } else {
-                robot.scoringMechanisms.flyWheel1.setPower(0);
-                robot.scoringMechanisms.flyWheel2.setPower(0);
-            }
-
-            // Artifact Release Control
-            long now = System.currentTimeMillis();
-
-            if (gamepad1.x) {
-                robot.scoringMechanisms.leftGateOpenUntil = Long.MAX_VALUE;
-                robot.scoringMechanisms.leftShotEndTime = 0;
-            } else if (gamepad1.xWasReleased()) {
-                robot.scoringMechanisms.leftGateOpenUntil = now + 100;
-                robot.scoringMechanisms.leftShotEndTime = now + 1500;
-            }
-
-            if (gamepad1.b) {
-                robot.scoringMechanisms.rightGateOpenUntil = Long.MAX_VALUE;
-                robot.scoringMechanisms.rightShotEndTime = 0;
-            } else if (gamepad1.bWasReleased()) {
-                robot.scoringMechanisms.rightGateOpenUntil = now + 100;
-                robot.scoringMechanisms.rightShotEndTime = now + 1500;
-            }
-
-            boolean leftShotActive = now < robot.scoringMechanisms.leftShotEndTime;
-            boolean rightShotActive = now < robot.scoringMechanisms.rightShotEndTime;
-
-            if (leftShotActive || rightShotActive) {
-                robot.scoringMechanisms.rollerIntake.setPower(1.0);
-
-                if (leftShotActive && !rightShotActive) {
-                    robot.scoringMechanisms.sorterIntake.setPower(1.0);
-                } else if (rightShotActive && !leftShotActive) {
-                    robot.scoringMechanisms.sorterIntake.setPower(-1.0);
-                } else {
-                    robot.scoringMechanisms.sorterIntake.setPower(0.0);
+            if (result != null && result.isValid()) {
+                java.util.List<LLResultTypes.FiducialResult> tags = result.getFiducialResults();
+                if (tags != null && !tags.isEmpty()) {
+                    txDeg = result.getTx();
+                    tagArea = result.getTa();
+                    hasTag = Math.abs(txDeg) <= Robot.ScoringMechanisms.SwitchDeadband;
                 }
             }
 
-            robot.scoringMechanisms.leftRelease.setPosition(now < robot.scoringMechanisms.leftGateOpenUntil ? robot.scoringMechanisms.artifactReleaseLeft : robot.scoringMechanisms.artifactHoldLeft);
-            robot.scoringMechanisms.rightRelease.setPosition(now < robot.scoringMechanisms.rightGateOpenUntil ? robot.scoringMechanisms.artifactReleaseRight : robot.scoringMechanisms.artifactHoldRight);
+            // Turret
+            double robotHeadingDeg = robot.driveTrain.pinPoint.getPosition().getHeading(AngleUnit.DEGREES);
+            double turretDeg = robot.scoringMechanisms.getTurretDeg();
+            double goalHeadingDeg = Robot.wrapDeg(robotHeadingDeg + turretDeg);
 
-            // GearShifter / Elevator Controller
+            if (hasTag) {
+                robot.scoringMechanisms.autoAimTurret(robotHeadingDeg, goalHeadingDeg, txDeg, true);
+            } else {
+                robot.scoringMechanisms.turretRotation.setPower(0.0);
+            }
+
+            // Intake
+            if (gamepad1.right_bumper) {
+                robot.scoringMechanisms.rollerIntake.setPower(1.0);
+            } else if (gamepad1.left_bumper) {
+                robot.scoringMechanisms.rollerIntake.setPower(-1.0);
+            } else {
+                robot.scoringMechanisms.rollerIntake.setPower(0.0);
+            }
+
+            // FlyWheel
+            final double FAR_RPS = 85.0;
+            final double CLOSE_RPS = 70.0;
+            double targetRps = FAR_RPS;
+            double idleRPS = 35.0;
+
+            if (hasTag && tagArea >= robot.vision.tagAreaThreshold) {
+                targetRps = CLOSE_RPS;
+            }
+
+            if (gamepad1.right_trigger >= 0.05) {
+                robot.scoringMechanisms.setFlywheelRPS(targetRps);
+            } else {
+                robot.scoringMechanisms.setFlywheelRPS(idleRPS);
+            }
+
+            // Artifact Release
+            if (gamepad1.x) {
+                robot.scoringMechanisms.artifactRelease.setPosition(0.0);
+            } else {
+                robot.scoringMechanisms.artifactRelease.setPosition(1.0);
+            }
+
+            // GearShift / Elevator
             if (gamepad1.share && gamepad1.options) {
                 robot.driveTrain.gearShift.setPosition(0.55);
                 robot.driveTrain.elevatorLeft.setPosition(1.0);
                 robot.driveTrain.elevatorRight.setPosition(0.0);
             }
 
+            // Telemetry
+            long now = System.currentTimeMillis();
             if (now - lastTelemetryUpdate >= telemetryInterval) {
-                // Drive / AimBot
-                telemetry.addLine("=== Drive + AimBot ===");
+                telemetry.addLine("=== Drive + PinPoint ===");
                 telemetry.addData("X Pos", "%5.2f", robot.driveTrain.pinPoint.getPosition().getX(DistanceUnit.INCH));
                 telemetry.addData("Y Pos", "%5.2f", robot.driveTrain.pinPoint.getPosition().getY(DistanceUnit.INCH));
-                telemetry.addData("Angle", "%5.2f", robot.driveTrain.pinPoint.getPosition().getHeading(AngleUnit.DEGREES));
-                telemetry.addData("AimBot Active", activeTargeting && hasTarget);
-                telemetry.addData("Tag In View", hasTarget);
-                telemetry.addData("Tag Area", hasTarget ? result.getTa() : 0.0);
-                telemetry.addData("Current Pipeline", robot.vision.limeLight.getStatus().getPipelineIndex() == 0 ? "NULL" : robot.vision.limeLight.getStatus().getPipelineIndex() == 1 ? "RED" : "BLUE");
+                telemetry.addData("Robot Heading", "%5.2f", robotHeadingDeg);
                 telemetry.addLine();
 
-                // Intake / Sorter
-                telemetry.addLine("=== Intake + Sorter ===");
-                telemetry.addData("Roller Status", robot.scoringMechanisms.rollerIntake.getPower() > 0 ? "ACTIVE" : "IDLE");
-                String sorterStatus;
-                if (gamepad1.left_bumper && !gamepad1.right_bumper) {
-                    sorterStatus = "LEFT";
-                } else if (gamepad1.right_bumper && !gamepad1.left_bumper) {
-                    sorterStatus = "RIGHT";
-                } else {
-                    sorterStatus = "IDLE";
-                }
-                telemetry.addData("Sorting", sorterStatus);
+                telemetry.addLine("=== Vision + Turret ===");
+                telemetry.addData("Has Tag (in window)", hasTag);
+                telemetry.addData("tx (deg)", "%5.2f", txDeg);
+                telemetry.addData("ta", "%5.2f", tagArea);
+                telemetry.addData("Turret Deg", "%5.2f", turretDeg);
                 telemetry.addLine();
 
-                // Shooter / Gates
-                telemetry.addLine("=== Shooter + Gates ===");
-                telemetry.addData("Flywheel1 RPS", "%5.2f", measuredFlywheelRps1);
-                telemetry.addData("Flywheel2 RPS", "%5.2f", measuredFlywheelRps2);
-                telemetry.addData("Avg RPS", "%5.2f", averageFlywheelRps);
-                telemetry.addData("Target RPS", "%5.2f", robot.scoringMechanisms.targetRPS);
-                telemetry.addData("Range Mode", robot.scoringMechanisms.targetRPS == robot.scoringMechanisms.closeTargetRPS ? "CLOSE" : "FAR");
-                telemetry.addData("Shooter Status", ((averageFlywheelRps >= (robot.scoringMechanisms.targetRPS - 1.0)) && (gamepad1.right_trigger >= 0.05)) ? "READY" : "CHARGING");
-                telemetry.addData("Left Gate", (now < robot.scoringMechanisms.leftGateOpenUntil) ? "Open" : "Closed");
-                telemetry.addData("Right Gate", (now < robot.scoringMechanisms.rightGateOpenUntil) ? "Open" : "Closed");
-                telemetry.addLine();
-
-                // Gearshift / Elevator
-                telemetry.addLine("=== GearShifter ===");
-                telemetry.addData("Shifted To", robot.driveTrain.gearShift.getPosition() == 0.0 ? "DriveTrain" : "Elevator");
-                telemetry.addData("GearShift Position", robot.driveTrain.gearShift.getPosition());
-                telemetry.addData("Left Elevator Position", robot.driveTrain.elevatorLeft.getPosition());
-                telemetry.addData("Right Elevator Position", robot.driveTrain.elevatorRight.getPosition());
-                telemetry.addLine();
+                telemetry.addLine("=== Shooter ===");
+                telemetry.addData("Target RPS", "%5.1f", targetRps);
+                telemetry.addData("Flywheel1 vel", "%7.1f", robot.scoringMechanisms.flyWheel1.getVelocity());
+                telemetry.addData("Flywheel2 vel", "%7.1f", robot.scoringMechanisms.flyWheel2.getVelocity());
 
                 telemetry.update();
                 lastTelemetryUpdate = now;
             }
+
+            idle();
         }
         robot.vision.limeLight.stop();
     }
