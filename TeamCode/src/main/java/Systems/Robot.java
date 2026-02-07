@@ -1,8 +1,14 @@
 package Systems;
 
+import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
 import org.firstinspires.ftc.robotcore.external.navigation.Pose2D;
 
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
+
+import org.firstinspires.ftc.vision.VisionPortal;
+import org.firstinspires.ftc.vision.apriltag.AprilTagDetection;
+import org.firstinspires.ftc.vision.apriltag.AprilTagProcessor;
+
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.hardware.limelightvision.LLResult;
 import com.qualcomm.hardware.limelightvision.LLResultTypes;
@@ -16,6 +22,8 @@ import com.qualcomm.robotcore.util.Range;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
+
+import java.util.List;
 
 public class Robot {
 
@@ -62,8 +70,6 @@ public class Robot {
             pinPoint.setEncoderDirections(GoBildaPinpointDriver.EncoderDirection.REVERSED, GoBildaPinpointDriver.EncoderDirection.FORWARD);
             pinPoint.setEncoderResolution(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD);
             pinPoint.setOffsets(-176, -66, DistanceUnit.MM);
-            pinPoint.resetPosAndIMU();
-            pinPoint.setPosition(new Pose2D(DistanceUnit.INCH, 0, 0, AngleUnit.DEGREES, 0));
 
             // GearShift SetUp
             gearShift = hardwareMap.get(Servo.class, "gS");
@@ -75,6 +81,13 @@ public class Robot {
             gearShift.setPosition(0.5);
             elevatorLeft.setPosition(0.5);
             elevatorRight.setPosition(0.5);
+        }
+
+        public void PinPointReset() {
+            if (pinPoint != null) {
+                pinPoint.resetPosAndIMU();
+                pinPoint.setPosition(new Pose2D(DistanceUnit.INCH, 0, 0, AngleUnit.DEGREES, 0));
+            }
         }
 
         public void tankDrive(double Drive, double Rotate) {
@@ -272,6 +285,7 @@ public class Robot {
         private final ElapsedTime turretAimTimer = new ElapsedTime();
 
         private enum TurretAimMode {Quick, Precise}
+
         private TurretAimMode aimMode = TurretAimMode.Quick;
         private double lastTargetSeenTimeS = 0.0;
 
@@ -338,10 +352,10 @@ public class Robot {
             }
 
             double targetShort = currentDeg + errShort;
-            double targetLong  = currentDeg + errLong;
+            double targetLong = currentDeg + errLong;
 
             boolean shortOk = (targetShort >= TurretMinDeg) && (targetShort <= TurretMaxDeg);
-            boolean longOk  = (targetLong  >= TurretMinDeg) && (targetLong  <= TurretMaxDeg);
+            boolean longOk = (targetLong >= TurretMinDeg) && (targetLong <= TurretMaxDeg);
 
             if (shortOk && longOk) {
                 return (Math.abs(errShort) <= Math.abs(errLong)) ? errShort : errLong;
@@ -364,7 +378,15 @@ public class Robot {
             turretRotation.setPower(0.0);
         }
 
+        public boolean autoAimTurret(double robotHeadingDeg, double goalHeadingDeg) {
+            return autoAimTurret(robotHeadingDeg, goalHeadingDeg, false, 0.0, false);
+        }
+
         public boolean autoAimTurret(double robotHeadingDeg, double goalHeadingDeg, double txDeg, boolean hasTarget) {
+            return autoAimTurret(robotHeadingDeg, goalHeadingDeg, true, txDeg, hasTarget);
+        }
+
+        public boolean autoAimTurret(double robotHeadingDeg, double goalHeadingDeg, boolean useVisionFineTune, double txDeg, boolean hasTarget) {
             if (turretRotation == null) return false;
 
             double nowS = turretAimTimer.seconds();
@@ -375,17 +397,21 @@ public class Robot {
             double turretErrDeg = turretErrDeg(desiredTurretDeg, currentTurretDeg);
 
             if (aimMode == TurretAimMode.Quick) {
-                if (hasTarget && Math.abs(turretErrDeg) <= SwitchDeadband) {
+                if (useVisionFineTune && hasTarget && Math.abs(turretErrDeg) <= SwitchDeadband) {
                     aimMode = TurretAimMode.Precise;
                 }
             } else {
-                boolean targetRecentlyLost = (!hasTarget) && ((nowS - lastTargetSeenTimeS) > LostTargetTimeout);
-                if (targetRecentlyLost) {
+                if (!useVisionFineTune) {
                     aimMode = TurretAimMode.Quick;
+                } else {
+                    boolean targetRecentlyLost = (!hasTarget) && ((nowS - lastTargetSeenTimeS) > LostTargetTimeout);
+                    if (targetRecentlyLost) {
+                        aimMode = TurretAimMode.Quick;
+                    }
                 }
             }
 
-            if (aimMode == TurretAimMode.Precise && hasTarget) {
+            if (aimMode == TurretAimMode.Precise && useVisionFineTune && hasTarget) {
                 if (Math.abs(txDeg) <= PreciseDeadband) {
                     stopTurret();
                     return true;
@@ -394,90 +420,104 @@ public class Robot {
                 cmd = applyTurretLimitsToPower(cmd);
                 setTurretPower(cmd);
                 return false;
-            } else {
-                if (Math.abs(turretErrDeg) <= QuickDeadband) {
-                    stopTurret();
-                    return false;
-                }
-                double cmd = Range.clip(turretErrDeg * QuickKp, -QuickMaxPower, QuickMaxPower);
-                cmd = applyTurretLimitsToPower(cmd);
-                setTurretPower(cmd);
+            }
+
+            if (Math.abs(turretErrDeg) <= QuickDeadband) {
+                stopTurret();
                 return false;
             }
+
+            double cmd = Range.clip(turretErrDeg * QuickKp, -QuickMaxPower, QuickMaxPower);
+            cmd = applyTurretLimitsToPower(cmd);
+            setTurretPower(cmd);
+            return false;
         }
     }
 
     public static class Vision {
         public Limelight3A limeLight;
-        public int desiredPipeline = 0;
-        public int RED = 1;
-        public int BLUE = 2;
-        public int motifTagId = -1;
-        public String motifPattern = "UNKNOWN";
+        public int artifactPipeline = 0;
+
+        private VisionPortal turretPortal;
+        private AprilTagProcessor aprilTag;
+        public static final int BLUE = 20;
+        public static final int RED = 24;
+
+        private int desiredTagId = -1;
+        private AprilTagDetection desiredDetection = null;
 
         public void init(HardwareMap hardwareMap) {
             limeLight = hardwareMap.get(Limelight3A.class, "limelight");
             limeLight.pipelineSwitch(0);
             limeLight.start();
+
+            WebcamName turretCam = hardwareMap.get(WebcamName.class, "TurretCam");
+            aprilTag = new AprilTagProcessor.Builder().build();
+            turretPortal = new VisionPortal.Builder()
+                    .setCamera(turretCam)
+                    .addProcessor(aprilTag)
+                    .build();
+
+            desiredDetection = null;
         }
 
         public void setPipeline(int pipelineIndex) {
-            desiredPipeline = pipelineIndex;
+            artifactPipeline = pipelineIndex;
             if (limeLight != null) {
                 try {
-                    limeLight.pipelineSwitch(desiredPipeline);
+                    limeLight.pipelineSwitch(artifactPipeline);
                 } catch (Exception ignored) {
                 }
             }
         }
 
-        public void updateMotif() {
-            if (motifTagId == 21 || motifTagId == 22 || motifTagId == 23) {
-                return;
-            }
+        public void update() {
+            desiredDetection = null;
+            if (aprilTag == null) return;
 
-            if (limeLight == null) {
-                return;
-            }
+            List<AprilTagDetection> detections = aprilTag.getDetections();
+            if (detections == null) return;
 
-            LLResult result = limeLight.getLatestResult();
-            if (result == null || !result.isValid()) {
-                return;
-            }
-
-            java.util.List<LLResultTypes.FiducialResult> fiducials = result.getFiducialResults();
-            if (fiducials == null || fiducials.isEmpty()) {
-                return;
-            }
-
-            int id = fiducials.get(0).getFiducialId();
-
-            switch (id) {
-                case 21:
-                    motifTagId = 21;
-                    motifPattern = "GPP";
+            for (AprilTagDetection d : detections) {
+                if (d != null && d.id == desiredTagId) {
+                    desiredDetection = d;
                     break;
-                case 22:
-                    motifTagId = 22;
-                    motifPattern = "PGP";
-                    break;
-                case 23:
-                    motifTagId = 23;
-                    motifPattern = "PPG";
-                    break;
-                default:
-                    break;
+                }
             }
         }
 
-        public boolean hasMotif() {
-            return motifTagId == 21 || motifTagId == 22 || motifTagId == 23;
+        public void setTrackedTag(int tagId) {
+            desiredTagId = tagId;
         }
 
-        // VARIABLES
-        public final double rotateGain = 0.0250;
-        public final double maxRotate = 0.75;
-        public final double tagAreaThreshold = 0.8;
+        public int getTrackedTag() {
+            return desiredTagId;
+        }
+
+        public boolean hasTrackedTag() {
+            return desiredDetection != null;
+        }
+
+        public double getTrackedYawDeg() {
+            return desiredDetection == null ? 0.0 : desiredDetection.ftcPose.yaw;
+        }
+
+        public double getTrackedRange() {
+            return desiredDetection == null ? 0.0 : desiredDetection.ftcPose.range;
+        }
+
+        public AprilTagDetection getTrackedDetection() {
+            return desiredDetection;
+        }
+
+        public void closeTurretCam() {
+            if (turretPortal != null) {
+                try {
+                    turretPortal.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
     }
 
     // Created Instances of Subsystems

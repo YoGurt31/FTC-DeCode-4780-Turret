@@ -27,6 +27,7 @@ public class TeleOpBasic extends LinearOpMode {
     public void runOpMode() {
 
         robot.init(hardwareMap);
+        robot.scoringMechanisms.zeroTurretHere();
 
         robot.vision.limeLight.setPollRateHz(15);
 
@@ -38,6 +39,7 @@ public class TeleOpBasic extends LinearOpMode {
         while (opModeIsActive()) {
 
             robot.driveTrain.pinPoint.update();
+            robot.vision.update();
 
             // Drive
             double drive = -gamepad1.left_stick_y;
@@ -72,7 +74,7 @@ public class TeleOpBasic extends LinearOpMode {
             if (hasTag) {
                 robot.scoringMechanisms.autoAimTurret(robotHeadingDeg, goalHeadingDeg, txDeg, true);
             } else {
-                robot.scoringMechanisms.turretRotation.setPower(0.0);
+                robot.scoringMechanisms.autoAimTurret(robotHeadingDeg, goalHeadingDeg);
             }
 
             // Intake
@@ -85,14 +87,8 @@ public class TeleOpBasic extends LinearOpMode {
             }
 
             // FlyWheel
-            final double FAR_RPS = 85.0;
-            final double CLOSE_RPS = 70.0;
-            double targetRps = FAR_RPS;
+            double targetRps = 55.0;
             double idleRPS = 35.0;
-
-            if (hasTag && tagArea >= robot.vision.tagAreaThreshold) {
-                targetRps = CLOSE_RPS;
-            }
 
             if (gamepad1.right_trigger >= 0.05) {
                 robot.scoringMechanisms.setFlywheelRPS(targetRps);
